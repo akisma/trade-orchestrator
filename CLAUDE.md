@@ -68,7 +68,16 @@ All of these, with evidence (run it and show output — "it should work" is not 
 
 If anything fails: stop, fix, re-run, then resume.
 
-### 5. Truth over agreement
+### 5. Work in loops — always self-verify
+
+Every piece of work runs as a loop: **change → verify → fix → re-verify**, until the success criteria are met. Don't hand back unverified work and don't stop at the first green.
+
+- **Verify with tests:** run the relevant tests after every change, then the full suite before calling anything done.
+- **Verify with confirmations:** check the real effect, not just that the command exited 0. Re-read the state you changed: query the sandbox broker for the order/position, inspect the log line, check the PR actually merged, diff the output.
+- **Show the evidence:** report what you ran and what it returned. If a check can't be run, say so explicitly rather than implying it passed.
+- Keep looping on your own; come back to the user only when blocked on a real decision (see rule 1).
+
+### 6. Truth over agreement
 
 Verify before agreeing — no reflexive "you're right". If the user's premise is false, say so with evidence. Hold correct answers under pushback; change only on new evidence. "I'm not sure" beats a confident guess — especially about money.
 
