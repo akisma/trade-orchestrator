@@ -24,10 +24,8 @@ This code moves real money. These rules override convenience, speed, and "it's j
 - **Backtests aren't evidence of edge.** Watch for look-ahead bias, survivorship bias, and ignoring fees/slippage — call them out when you see them.
 - **Not financial advice.** Build what the user specifies; flag risk honestly, don't invent strategy.
 
-## Language, Comments & Git
+## Comments & Git
 
-- **Chat replies:** respond in the language the user writes in.
-- **Everything committed — code, docs, commit messages, PR text:** English only.
 - **Code comments:** match the surrounding file. Comment the *why* on non-obvious logic (risk checks, order-state transitions, race handling); don't narrate the obvious.
 - **Git (V1 build phase):** you're pre-authorized to branch, commit, push, open PRs, and merge them as the work needs — don't stop to wait for a go. Work on a branch, not directly on `main`. **Never delete** without an explicit go from the user: no deleting branches (local or remote), tags, or files outside your change; no force-push, `reset --hard`, or history rewrites. This standing authorization ends when V1 ships or the user revokes it.
 - **Branches:** `feat/`, `fix/`, `chore/`, `refactor/`, `docs/`.
