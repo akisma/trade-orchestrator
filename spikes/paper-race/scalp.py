@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""s5: MU step-down scalp on Alpaca PAPER. Throwaway spike, same rules as race.py (paper endpoint only).
+"""s5: MU step scalp, both directions, on Alpaca PAPER. Throwaway spike, same rules as race.py (paper endpoint only).
 
-Rule (tested on Oct 13 – Nov 25 2026 one-minute data, short side only):
+Rule (in the Oct 13 – Nov 25 2026 one-minute study the short side had a thin edge and the long side lost;
+both run here at the user's direction, to trade the oscillations either way):
   - Track swings of about $2.50 (0.451% of the day's opening price) in real time.
   - A step down = a lower swing high followed by a break of the previous swing low.
   - On the second or later consecutive step down, short QTY shares at the break with a tight limit,
     then attach a take-profit about $5 below and a stop about $5 above the fill (0.902% of the open).
+  - Mirror for steps up (higher swing low, then a break of the previous swing high): go long.
+  - A signal against an open position is ignored; exits are the target, the stop, or the close.
   - One position at a time, no new entries in the last 30 minutes, flat 6 minutes before the close.
 
 Usage: scalp.py start | stop | test | run
@@ -18,16 +21,16 @@ from race import ApiError, DATA, ET, STATE, TRADE, api, log, positions, sessions
 
 SYMBOL, QTY = "MU", 200
 SWING, TARGET, STOP = 0.00451, 0.00902, 0.00902  # fractions of the day's opening price
-MAX_ENTRIES = 12   # per day
+MAX_ENTRIES = 20   # per day, both directions combined
 POLL = 4           # seconds between price checks
-COLLAR = 0.10      # entry limit sits this far below the last price; we never chase further
-LATE = 1.00        # skip the signal if price is already this far below the broken level
+COLLAR = 0.10      # entry limit sits this far through the last price; we never chase further
+LATE = 1.00        # skip the signal if price is already this far past the broken level
 PID = STATE / "scalp.pid"
 
 
 class Steps:
-    """Real-time swing tracker. feed() returns the broken swing low when a tick completes
-    step-down number 2 or later, otherwise None."""
+    """Real-time swing tracker. feed() returns (side, broken level) when a tick completes the second or
+    later consecutive step: side -1 for a step down (short), +1 for a step up (long). Otherwise None."""
 
     def __init__(self, z, anchor):
         self.z, self.anchor, self.dir, self.ext = z, anchor, 0, None
@@ -52,18 +55,20 @@ class Steps:
             if h >= self.ext + z:
                 self.lows.append(self.ext)
                 self.dir, self.ext = 1, h
-        signal_level = None
+        found = None
         if self.dir == -1 and self.lows and self.broke_low < len(self.lows) - 1 and l < self.lows[-1]:
             self.broke_low = len(self.lows) - 1
             self.down = self.down + 1 if len(self.highs) >= 2 and self.highs[-1] < self.highs[-2] else 1
             self.up = 0
             if self.down >= 2:
-                signal_level = self.lows[-1]
+                found = (-1, self.lows[-1])
         if self.dir == 1 and self.highs and self.broke_high < len(self.highs) - 1 and h > self.highs[-1]:
             self.broke_high = len(self.highs) - 1
             self.up = self.up + 1 if len(self.lows) >= 2 and self.lows[-1] > self.lows[-2] else 1
             self.down = 0
-        return signal_level
+            if self.up >= 2:
+                found = (1, self.highs[-1])
+        return found
 
 
 def cid(tag, suffix=""):
@@ -86,11 +91,13 @@ def flatten(tag, suffix=""):
     log(f"  s5 FLATTEN {int(abs(qty))} {SYMBOL} → {o['status']}")
 
 
-def enter(n, price, tgt, stp, qty=QTY, suffix=""):
-    """Short with a tight limit; once filled, attach a one-cancels-other exit. Returns True if a position was opened."""
-    limit = round(price - COLLAR, 2)
+def enter(n, side, price, tgt, stp, qty=QTY, suffix=""):
+    """Enter long (side 1) or short (side -1) with a tight limit; once filled, attach a one-cancels-other exit.
+    Returns True if a position was opened."""
+    word, exit_word = ("buy", "sell") if side == 1 else ("sell", "buy")
+    limit = round(price + side * COLLAR, 2)
     try:
-        o = api("POST", f"{TRADE}/orders", body=dict(symbol=SYMBOL, qty=str(qty), side="sell", type="limit", limit_price=f"{limit:.2f}",
+        o = api("POST", f"{TRADE}/orders", body=dict(symbol=SYMBOL, qty=str(qty), side=word, type="limit", limit_price=f"{limit:.2f}",
                                                      time_in_force="day", client_order_id=cid(f"e{n}", suffix)))
     except ApiError as e:
         log(f"  s5 ENTRY FAILED: {e}")
@@ -112,16 +119,16 @@ def enter(n, price, tgt, stp, qty=QTY, suffix=""):
         log(f"  s5 entry {n}: limit {limit} not filled in 20s, cancelled")
         return False
     fill = float(o["filled_avg_price"])
-    take, stop = round(fill - tgt, 2), round(fill + stp, 2)
+    take, stop = round(fill + side * tgt, 2), round(fill - side * stp, 2)
     try:
-        api("POST", f"{TRADE}/orders", body=dict(symbol=SYMBOL, qty=str(filled), side="buy", type="limit", time_in_force="day", order_class="oco",
+        api("POST", f"{TRADE}/orders", body=dict(symbol=SYMBOL, qty=str(filled), side=exit_word, type="limit", time_in_force="day", order_class="oco",
                                                  take_profit={"limit_price": f"{take:.2f}"}, stop_loss={"stop_price": f"{stop:.2f}"},
                                                  client_order_id=cid(f"x{n}", suffix)))
     except ApiError as e:
         log(f"  s5 EXIT ORDER FAILED ({e}); covering immediately")
         flatten(f"bail{n}", suffix)
         return False
-    log(f"  s5 ENTRY {n}: short {filled} {SYMBOL} @ {fill:.2f} | target {take:.2f} | stop {stop:.2f}")
+    log(f"  s5 ENTRY {n}: {'long' if side == 1 else 'short'} {filled} {SYMBOL} @ {fill:.2f} | target {take:.2f} | stop {stop:.2f}")
     return True
 
 
@@ -143,7 +150,7 @@ def trade_day(op, cl):
             if o["client_order_id"].startswith(today) and "-test" not in o["client_order_id"]]
     entries, in_pos = len(done), SYMBOL in positions()
     log(f"s5 scalp live: open {ref:.2f}, swing ${z:.2f}, target ${tgt:.2f}, stop ${stp:.2f}, {QTY} shares | warmed up on {len(warm)} bars, "
-        f"{steps.down} step(s) down so far, {entries} entries already today")
+        f"{steps.down} step(s) down / {steps.up} up right now, {entries} entries already today, both directions")
     while True:
         now = datetime.now(ET)
         if now >= cl - timedelta(minutes=6):
@@ -152,18 +159,19 @@ def trade_day(op, cl):
             return
         try:
             p = snapshots([SYMBOL])[SYMBOL]["price"]
-            level = steps.feed(p, p)
+            found = steps.feed(p, p)
             if in_pos:
                 if SYMBOL not in positions():
                     in_pos = False
                     log("  s5 position closed (target or stop hit)")
-            elif level and entries < MAX_ENTRIES and now < cl - timedelta(minutes=30):
-                if p < level - LATE:
+            elif found and entries < MAX_ENTRIES and now < cl - timedelta(minutes=30):
+                side, level = found
+                if side * (p - level) > LATE:
                     log(f"  s5 signal at {level:.2f} skipped: price already {p:.2f}")
                 else:
                     entries += 1
-                    log(f"  s5 SIGNAL: step down #{steps.down}, broke {level:.2f}, price {p:.2f}")
-                    in_pos = enter(entries, p, tgt, stp)
+                    log(f"  s5 SIGNAL: step {'up' if side == 1 else 'down'} #{steps.up if side == 1 else steps.down}, broke {level:.2f}, price {p:.2f}")
+                    in_pos = enter(entries, side, p, tgt, stp)
         except Exception:
             log(f"s5 loop error:\n{traceback.format_exc()}")
         time.sleep(POLL)
@@ -229,9 +237,13 @@ def stop():
 
 
 def test():
-    """Live plumbing check with 1 share: short, attach a far-away exit pair, then cancel and cover."""
+    """Live plumbing check with 1 share: enter (long by default, `test short` for short), attach a far-away
+    exit pair, then cancel and close. Refuses to run while a real position is open, since cleanup would close it."""
+    if SYMBOL in positions():
+        return print("a position is open; not testing")
+    side = -1 if "short" in sys.argv else 1
     p = snapshots([SYMBOL])[SYMBOL]["price"]
-    ok = enter(0, p, 40.0, 40.0, qty=1, suffix="-test")
+    ok = enter(0, side, p, 40.0, 40.0, qty=1, suffix="-test")
     orders = api("GET", f"{TRADE}/orders", params=dict(status="open", symbols=SYMBOL, nested="true"))
     print("entry + exit pair placed:", ok, "| resting:", [(o["type"], o["limit_price"], [(l["type"], l["stop_price"]) for l in o.get("legs") or []]) for o in orders])
     flatten("flat", "-test")
