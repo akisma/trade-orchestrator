@@ -68,12 +68,17 @@ def api(method, url, params=None, body=None):
         url += "?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(url, method=method, data=json.dumps(body).encode() if body is not None else None,
                                  headers={"APCA-API-KEY-ID": KEY, "APCA-API-SECRET-KEY": SEC, "Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            raw = r.read()
-            return json.loads(raw) if raw else None
-    except urllib.error.HTTPError as e:
-        raise ApiError(e.code, e.read().decode()[:300])
+    for attempt in range(5):  # ride out brief network drops; a re-sent order is rejected by its duplicate client_order_id
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                raw = r.read()
+                return json.loads(raw) if raw else None
+        except urllib.error.HTTPError as e:
+            raise ApiError(e.code, e.read().decode()[:300])
+        except (urllib.error.URLError, TimeoutError, ConnectionError):
+            if attempt == 4:
+                raise
+            time.sleep(2)
 
 
 def log(msg):
@@ -254,6 +259,26 @@ def ev_close(next_session):
     s4_entry(next_session)
 
 
+def ev_afterhours(_next):
+    """If the close was missed (e.g. the laptop was asleep), close leftover day positions in the after-hours
+    session with limit orders rather than carry them overnight."""
+    pos = positions()
+    left = [s for s in list(S1) + list(S2) + ["MU"] if s in pos]
+    if not left:
+        return
+    log(f"AFTER-HOURS RECOVERY: {left} still open after the close; closing with limit orders")
+    for s in left:
+        for o in api("GET", f"{TRADE}/orders", params=dict(status="open", symbols=s)):
+            api("DELETE", f"{TRADE}/orders/{o['id']}")
+        qty, last = float(pos[s]["qty"]), float(pos[s]["current_price"])
+        side = "sell" if qty > 0 else "buy"
+        limit = round(last * (0.994 if side == "sell" else 1.006), 2)
+        strat = STRATEGY_OF.get(s, "s5")
+        o = api("POST", f"{TRADE}/orders", body=dict(symbol=s, qty=str(int(abs(qty))), side=side, type="limit", limit_price=f"{limit:.2f}", time_in_force="day",
+                                                     extended_hours=True, client_order_id=f"race-{strat}-{today():%Y%m%d}-{s}-exitah"))
+        log(f"  ORDER race-{strat}-{today():%Y%m%d}-{s}-exitah: {side} {int(abs(qty))} {s} limit {limit} → {o['status']}")
+
+
 # --- scheduler ---------------------------------------------------------------------------------
 
 _SESSIONS = (None, None)  # (fetched for date, sessions); the calendar only needs one lookup per day
@@ -274,7 +299,7 @@ def schedule(op, cl):
     s, m = lambda n: timedelta(seconds=n), lambda n: timedelta(minutes=n)
     return [("exits_am", op + s(15), cl - m(10), ev_exits_am), ("s1_entry", op + s(20), op + m(10), ev_s1_entry),
             ("options_exit", op + m(5), cl - m(10), ev_options_exit), ("s2_entry", op + m(30) + s(5), op + m(35), ev_s2_entry),
-            ("close", cl - m(5), cl - s(20), ev_close)]
+            ("close", cl - m(5), cl - s(20), ev_close), ("afterhours", cl + s(60), cl + m(235), ev_afterhours)]
 
 
 def run():
@@ -298,15 +323,17 @@ def run():
         if now < at:
             time.sleep(min(20, (at - now).total_seconds()))
             continue
+        if now <= deadline:
+            try:
+                handler(next(x[0] for x in ses if x[0] > now.date()))
+            except Exception:
+                log(f"EVENT {name} FAILED, retrying until {deadline:%H:%M:%S}:\n{traceback.format_exc()}")
+                time.sleep(5)
+                continue  # not marked done; handlers are idempotent
+        else:
+            log(f"MISSED {name} (due {at:%H:%M:%S}, woke at {now:%H:%M:%S}); skipped")
         done.add(f"{now.date()}:{name}")
         done_file.write_text(json.dumps(sorted(done)))
-        if now > deadline:
-            log(f"MISSED {name} (due {at:%H:%M:%S}, woke at {now:%H:%M:%S}); skipped")
-            continue
-        try:
-            handler(next(x[0] for x in ses if x[0] > now.date()))
-        except Exception:
-            log(f"EVENT {name} FAILED:\n{traceback.format_exc()}")
 
 
 def pid_alive():
