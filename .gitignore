@@ -158,3 +158,6 @@ vite.config.ts.timestamp-*
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# Paper-race spike runtime state
+spikes/paper-race/state/
