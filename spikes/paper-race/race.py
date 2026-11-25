@@ -37,7 +37,7 @@ S3 = {"SOXL": 33_000, "MUU": 42_000}
 S3_TRIGGER = -3.0  # percent, open → 5 min before the close
 S4 = {"MU": 7_500, "DELL": 7_500}  # premium budget per underlying per night
 STRATEGY_OF = {**{s: "s1" for s in S1}, **{s: "s2" for s in S2}, **{s: "s3" for s in S3}}
-NAMES = {"s1": "Down ETFs all day", "s2": "Short weak opens at 10:00", "s3": "Overnight rebound", "s4": "Overnight straddle", "s5": "MU step scalp, both ways"}
+NAMES = {"s1": "Down ETFs all day", "s2": "Short weak opens at 10:00", "s3": "Overnight rebound", "s4": "Overnight straddle", "s5": "MU step scalp, both ways", "s6": "MU scalp, options twin"}
 DRY = False
 
 

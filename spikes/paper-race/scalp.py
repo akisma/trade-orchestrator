@@ -9,9 +9,13 @@ both run here at the user's direction, to trade the oscillations either way):
     then attach a take-profit about $5 below and a stop about $5 above the fill (0.902% of the open).
   - Mirror for steps up (higher swing low, then a break of the previous swing high): go long.
   - A signal against an open position is ignored; exits are the target, the stop, or the close.
+
+s6 is the options twin: on every s5 entry it also buys TWIN_CONTRACTS at-the-money calls (long) or puts
+(short), nearest expiry that is not today, and sells them when the share trade ends. Same entries and exits,
+so shares and options can be compared directly.
   - One position at a time, no new entries in the last 30 minutes, flat 6 minutes before the close.
 
-Usage: scalp.py start | stop | test | run
+Usage: scalp.py start | stop | test | twintest | run
 """
 import os, signal, subprocess, sys, time, traceback
 from datetime import datetime, timedelta
@@ -25,6 +29,7 @@ MAX_ENTRIES = 20   # per day, both directions combined
 POLL = 4           # seconds between price checks
 COLLAR = 0.10      # entry limit sits this far through the last price; we never chase further
 LATE = 1.00        # skip the signal if price is already this far past the broken level
+TWIN_CONTRACTS = 4  # s6: 4 at-the-money contracts move about like 200 shares
 PID = STATE / "scalp.pid"
 
 
@@ -132,7 +137,42 @@ def enter(n, side, price, tgt, stp, qty=QTY, suffix=""):
     return True
 
 
-def trade_day(op, cl):
+def open_twin(n, side, spot, next_session, contracts=TWIN_CONTRACTS, suffix=""):
+    """s6: buy at-the-money calls (long) or puts (short) alongside the share trade, so the same entries and
+    exits can be compared in shares and in options. Nearest expiry that is not today. Returns the option symbol."""
+    typ = "call" if side == 1 else "put"
+    try:
+        found = api("GET", f"{TRADE}/options/contracts", params=dict(
+            underlying_symbols=SYMBOL, status="active", type=typ, limit=1000, strike_price_gte=round(spot * 0.97, 2), strike_price_lte=round(spot * 1.03, 2),
+            expiration_date_gte=next_session.isoformat(), expiration_date_lte=(next_session + timedelta(days=10)).isoformat())).get("option_contracts", [])
+        exp = min(c["expiration_date"] for c in found)
+        c = min((c for c in found if c["expiration_date"] == exp), key=lambda c: abs(float(c["strike_price"]) - spot))
+        o = api("POST", f"{TRADE}/orders", body=dict(symbol=c["symbol"], qty=str(contracts), side="buy", type="market", time_in_force="day",
+                                                     client_order_id=f"race-s6-{race.today():%Y%m%d}-{c['symbol']}-e{n}{suffix}"))
+        log(f"  s6 TWIN {n}: buy {contracts} {typ}s {c['symbol']} (strike {float(c['strike_price']):g}, exp {exp}) → {o['status']}")
+        return c["symbol"]
+    except Exception as e:
+        log(f"  s6 twin entry failed: {e}")
+        return None
+
+
+def close_twin(symbol, n, suffix=""):
+    try:
+        for o in api("GET", f"{TRADE}/orders", params=dict(status="open", symbols=symbol)):
+            api("DELETE", f"{TRADE}/orders/{o['id']}")
+            time.sleep(1)
+        pos = positions().get(symbol)
+        if not pos:
+            return log(f"  s6 twin {symbol}: nothing to sell")
+        qty = int(abs(float(pos["qty"])))
+        o = api("POST", f"{TRADE}/orders", body=dict(symbol=symbol, qty=str(qty), side="sell", type="market", time_in_force="day",
+                                                     client_order_id=f"race-s6-{race.today():%Y%m%d}-{symbol}-x{n}{suffix}"))
+        log(f"  s6 TWIN {n}: sell {qty} {symbol} (bought near {float(pos['avg_entry_price']):.2f}, now {float(pos['current_price']):.2f}) → {o['status']}")
+    except Exception as e:
+        log(f"  s6 twin exit failed for {symbol}: {e}")
+
+
+def trade_day(op, cl, next_session):
     while True:  # wait for today's opening price on the free feed
         snap = snapshots([SYMBOL]).get(SYMBOL, {})
         if snap.get("open") and snap.get("open_is_today"):
@@ -148,14 +188,22 @@ def trade_day(op, cl):
     today = f"race-s5-{race.today():%Y%m%d}-{SYMBOL}-e"
     done = [o for o in api("GET", f"{TRADE}/orders", params=dict(status="all", after=op.isoformat(), limit=500))
             if o["client_order_id"].startswith(today) and "-test" not in o["client_order_id"]]
-    entries, in_pos = len(done), SYMBOL in positions()
+    held = positions()
+    entries, in_pos = len(done), SYMBOL in held
+    # s4's overnight MU options are sold by race.py at open + 5 min; after that any MU option here is our twin
+    twins_ok_from = op + timedelta(minutes=6)
+    twin = next((s for s, p in held.items() if p.get("asset_class") == "us_option" and race.option_root(s) == SYMBOL), None) \
+        if datetime.now(ET) >= twins_ok_from else None
     log(f"s5 scalp live: open {ref:.2f}, swing ${z:.2f}, target ${tgt:.2f}, stop ${stp:.2f}, {QTY} shares | warmed up on {len(warm)} bars, "
-        f"{steps.down} step(s) down / {steps.up} up right now, {entries} entries already today, both directions")
+        f"{steps.down} step(s) down / {steps.up} up right now, {entries} entries already today, both directions | "
+        f"s6 options twin: {TWIN_CONTRACTS} contracts per trade{', holding ' + twin if twin else ''}")
     while True:
         now = datetime.now(ET)
         if now >= cl - timedelta(minutes=6):
             log("s5 end of day: cancelling orders and flattening")
             flatten("flat")
+            if twin:
+                close_twin(twin, entries)
             return
         try:
             p = snapshots([SYMBOL])[SYMBOL]["price"]
@@ -164,7 +212,10 @@ def trade_day(op, cl):
                 if SYMBOL not in positions():
                     in_pos = False
                     log("  s5 position closed (target or stop hit)")
-            elif found and entries < MAX_ENTRIES and now < cl - timedelta(minutes=30):
+            if not in_pos and twin:  # the twin always exits with the share trade
+                close_twin(twin, entries)
+                twin = None
+            elif not in_pos and found and entries < MAX_ENTRIES and now < cl - timedelta(minutes=30):
                 side, level = found
                 if side * (p - level) > LATE:
                     log(f"  s5 signal at {level:.2f} skipped: price already {p:.2f}")
@@ -172,6 +223,8 @@ def trade_day(op, cl):
                     entries += 1
                     log(f"  s5 SIGNAL: step {'up' if side == 1 else 'down'} #{steps.up if side == 1 else steps.down}, broke {level:.2f}, price {p:.2f}")
                     in_pos = enter(entries, side, p, tgt, stp)
+                    if in_pos and now >= twins_ok_from:
+                        twin = open_twin(entries, side, p, next_session)
         except Exception:
             log(f"s5 loop error:\n{traceback.format_exc()}")
         time.sleep(POLL)
@@ -191,7 +244,7 @@ def run():
         if sess and sess[0] not in traded and sess[1] + timedelta(seconds=90) <= now < sess[2] - timedelta(minutes=6):
             traded.add(sess[0])
             try:
-                trade_day(sess[1], sess[2])
+                trade_day(sess[1], sess[2], next(x[0] for x in sessions() if x[0] > sess[0]))
             except Exception:
                 log(f"s5 day failed:\n{traceback.format_exc()}")
                 traded.discard(sess[0])
@@ -251,5 +304,20 @@ def test():
     print("after cleanup: position", positions().get(SYMBOL, {}).get("qty", 0), "| open orders", len(api("GET", f"{TRADE}/orders", params=dict(status="open", symbols=SYMBOL))))
 
 
+def twintest():
+    """Live plumbing check for s6: buy 1 at-the-money call, then sell it."""
+    spot = snapshots([SYMBOL])[SYMBOL]["price"]
+    nxt = next(x[0] for x in sessions() if x[0] > race.today())
+    sym = open_twin(0, 1, spot, nxt, contracts=1, suffix="-test")
+    for _ in range(15):
+        time.sleep(2)
+        if sym in positions():
+            break
+    print("holding:", sym, positions().get(sym, {}).get("qty"), "@", positions().get(sym, {}).get("avg_entry_price"))
+    close_twin(sym, 0, "-test")
+    time.sleep(6)
+    print("after cleanup:", "still held" if sym in positions() else "flat", "| open option orders:", len(api("GET", f"{TRADE}/orders", params=dict(status="open", symbols=sym))))
+
+
 if __name__ == "__main__":
-    {"start": start, "stop": stop, "test": test, "run": run}.get(sys.argv[1] if len(sys.argv) > 1 else "", lambda: print(__doc__))()
+    {"start": start, "stop": stop, "test": test, "twintest": twintest, "run": run}.get(sys.argv[1] if len(sys.argv) > 1 else "", lambda: print(__doc__))()
