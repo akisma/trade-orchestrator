@@ -161,3 +161,6 @@ vite.config.ts.timestamp-*
 
 # Paper-race spike runtime state
 spikes/paper-race/state/
+
+# Python bytecode
+__pycache__/
