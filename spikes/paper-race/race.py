@@ -8,7 +8,7 @@ paper endpoint (hard-coded below) and refuses to start without paper keys.
   s2  Short weak opens         at 10:00 short names whose first 30 min were red, cover before the close
   s3  Overnight rebound        before the close buy names down 3%+ on the day, sell at the next open
   s4  Overnight straddle       before the close buy an at-the-money call + put, sell after the next open
-  s5  MU step-down scalp       runs separately in scalp.py (intraday, flat by the close)
+  s5  MU step scalp, both ways runs separately in scalp.py (intraday, flat by the close)
 
 Symbols never overlap between strategies, so positions cannot net against each other.
 Every order carries client_order_id "race-<strategy>-<yyyymmdd>-<symbol>-<tag>", which also makes
@@ -37,7 +37,7 @@ S3 = {"SOXL": 33_000, "MUU": 42_000}
 S3_TRIGGER = -3.0  # percent, open → 5 min before the close
 S4 = {"MU": 7_500, "DELL": 7_500}  # premium budget per underlying per night
 STRATEGY_OF = {**{s: "s1" for s in S1}, **{s: "s2" for s in S2}, **{s: "s3" for s in S3}}
-NAMES = {"s1": "Down ETFs all day", "s2": "Short weak opens at 10:00", "s3": "Overnight rebound", "s4": "Overnight straddle", "s5": "MU step-down scalp"}
+NAMES = {"s1": "Down ETFs all day", "s2": "Short weak opens at 10:00", "s3": "Overnight rebound", "s4": "Overnight straddle", "s5": "MU step scalp, both ways"}
 DRY = False
 
 
