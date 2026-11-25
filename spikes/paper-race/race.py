@@ -8,6 +8,7 @@ paper endpoint (hard-coded below) and refuses to start without paper keys.
   s2  Short weak opens         at 10:00 short names whose first 30 min were red, cover before the close
   s3  Overnight rebound        before the close buy names down 3%+ on the day, sell at the next open
   s4  Overnight straddle       before the close buy an at-the-money call + put, sell after the next open
+  s5  MU step-down scalp       runs separately in scalp.py (intraday, flat by the close)
 
 Symbols never overlap between strategies, so positions cannot net against each other.
 Every order carries client_order_id "race-<strategy>-<yyyymmdd>-<symbol>-<tag>", which also makes
@@ -31,12 +32,12 @@ RACE_START = "2026-11-25"
 # dollars per position; shares are computed from the price at entry
 S1 = {"SOXS": 14_400, "SQQQ": 27_500, "MUD": 33_100}
 S1_STOP = 0.05
-S2 = {"DELL": 17_300, "SNDK": 10_200, "AMAT": 14_500, "AAOI": 10_000, "MU": 11_500, "BE": 11_500}
+S2 = {"DELL": 17_300, "SNDK": 10_200, "AMAT": 14_500, "AAOI": 10_000, "BE": 11_500}  # MU belongs to s5 (scalp.py)
 S3 = {"SOXL": 33_000, "MUU": 42_000}
 S3_TRIGGER = -3.0  # percent, open → 5 min before the close
 S4 = {"MU": 7_500, "DELL": 7_500}  # premium budget per underlying per night
 STRATEGY_OF = {**{s: "s1" for s in S1}, **{s: "s2" for s in S2}, **{s: "s3" for s in S3}}
-NAMES = {"s1": "Down ETFs all day", "s2": "Short weak opens at 10:00", "s3": "Overnight rebound", "s4": "Overnight straddle"}
+NAMES = {"s1": "Down ETFs all day", "s2": "Short weak opens at 10:00", "s3": "Overnight rebound", "s4": "Overnight straddle", "s5": "MU step-down scalp"}
 DRY = False
 
 
@@ -350,6 +351,12 @@ def stop():
 def status():
     pid = pid_alive()
     print(f"runner: {'running, pid ' + str(pid) if pid else 'NOT RUNNING'}")
+    try:
+        scalp_pid = int((STATE / "scalp.pid").read_text())
+        os.kill(scalp_pid, 0)
+        print(f"scalp runner (s5): running, pid {scalp_pid}")
+    except (OSError, ValueError):
+        print("scalp runner (s5): NOT RUNNING (start with: python3 spikes/paper-race/scalp.py start)")
     orders, after = [], f"{RACE_START}T00:00:00Z"
     while True:
         page = api("GET", f"{TRADE}/orders", params=dict(status="all", limit=500, after=after, direction="asc", nested="true"))
@@ -383,7 +390,7 @@ def status():
         t[1] += fills
         t[2].append(f"{sym} {cash + mark:+,.0f}" + (f" (open {net:g})" if abs(net) > 1e-9 else ""))
     print(f"\n{'strategy':30} {'P&L $':>10} {'fills':>6}  by symbol")
-    for strat in ("s1", "s2", "s3", "s4"):
+    for strat in NAMES:
         pl, fills, detail = totals.get(strat, [0.0, 0, []])
         print(f"{strat} {NAMES[strat]:27} {pl:>10,.0f} {fills:>6}  {', '.join(detail)}")
     acct = api("GET", f"{TRADE}/account")

@@ -1,6 +1,6 @@
 # Paper race (throwaway spike)
 
-Four mechanical strategies racing in one Alpaca **paper** account, to see how each behaves in live
+Five mechanical strategies racing in one Alpaca **paper** account, to see how each behaves in live
 market conditions. This is an experiment harness, not the orchestrator: no tests, no risk layer,
 stdlib only. `race.py` hard-codes the paper endpoint and refuses to start without paper keys.
 
@@ -15,6 +15,8 @@ Started 2026-11-25; planned to run through Fri 2026-12-04 (7 sessions; Nov 27 cl
 | s3 Overnight rebound | 5 min before the close, buy names down 3%+ since the open; sell at the next open | SOXL 33k, MUU 42k |
 | s4 Overnight straddle | 5 min before the close, buy an at-the-money call + put (nearest expiry after the next session); sell 5 min after the next open | MU, DELL: $7.5k premium each |
 
+| s5 MU step-down scalp | Intraday, short only: on the second or later consecutive step down (swings of about $2.50), short with a tight limit; target and stop about $5 either side of the fill; one position at a time; flat 6 min before the close. Runs in `scalp.py` | MU, 200 shares |
+
 Each strategy has about $75k (s4 risks premium only). Positions inside a strategy are sized by
 inverse volatility. Picks come from a hindsight study of Oct 13 – Nov 24 2026, a single crash
 regime, so they are flattered. NVDA and anything driven by it directly (NVDQ) is excluded as an
@@ -27,6 +29,7 @@ python3 spikes/paper-race/race.py start    # detach and run in the background
 python3 spikes/paper-race/race.py status   # runner state + P&L per strategy
 python3 spikes/paper-race/race.py plan     # dry run of every event, sends nothing
 python3 spikes/paper-race/race.py stop
+python3 spikes/paper-race/scalp.py start   # s5 runs as its own background process (stop | test)
 ```
 
 Log: `spikes/paper-race/state/race.log` (gitignored).
@@ -40,4 +43,5 @@ Log: `spikes/paper-race/state/race.log` (gitignored).
 - Real-time prices come from the free IEX feed (last trade), which can differ slightly from the
   consolidated price. Fine for deciding red/green, not for pricing limit orders.
 - Paper fills ignore liquidity and spreads, so results are optimistic, especially for options and MUD.
+- s5's rule showed a thin edge in the six-week study (56% of 319 trades, about $0.29 a share after costs) and none on the long side or at other swing sizes.
 - A few sessions cannot separate skill from luck. Read the result as "what happened", not proof.
