@@ -39,8 +39,10 @@ Log: `spikes/paper-race/state/race.log` (gitignored).
 
 - The runner is a background process. It does not survive a reboot or logout; run `start` again.
 - The Mac must be awake at the open, 10:00 and 5 min before the close (ET). `caffeinate` blocks
-  idle sleep only; a closed lid still sleeps. A missed entry is skipped; a missed exit is closed
-  at the next open and logged as RECOVERY.
+  idle sleep only; a closed lid still sleeps (this happened on Nov 25 and the close was missed).
+  A missed entry is skipped. A missed close is repaired after hours with limit orders if the Mac
+  wakes before 8pm ET, otherwise at the next open; both are logged as RECOVERY. Failed events retry
+  until their deadline and API calls ride out brief network drops.
 - Real-time prices come from the free IEX feed (last trade), which can differ slightly from the
   consolidated price. Fine for deciding red/green, not for pricing limit orders.
 - Paper fills ignore liquidity and spreads, so results are optimistic, especially for options and MUD.
