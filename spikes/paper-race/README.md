@@ -1,6 +1,6 @@
 # Paper race (throwaway spike)
 
-Five mechanical strategies racing in one Alpaca **paper** account, to see how each behaves in live
+Six mechanical strategies racing in one Alpaca **paper** account, to see how each behaves in live
 market conditions. This is an experiment harness, not the orchestrator: no tests, no risk layer,
 stdlib only. `race.py` hard-codes the paper endpoint and refuses to start without paper keys.
 
@@ -16,6 +16,7 @@ Started 2026-11-25; planned to run through Fri 2026-12-04 (7 sessions; Nov 27 cl
 | s4 Overnight straddle | 5 min before the close, buy an at-the-money call + put (nearest expiry after the next session); sell 5 min after the next open | MU, DELL: $7.5k premium each |
 
 | s5 MU step scalp, both ways | Intraday: on the second or later consecutive step down (swings of about $2.50) short, on the second or later step up go long, each with a tight limit; target and stop about $5 either side of the fill; one position at a time; flat 6 min before the close. Runs in `scalp.py` | MU, 200 shares |
+| s6 MU scalp, options twin | On every s5 entry, also buy 4 at-the-money MU calls (long) or puts (short), nearest expiry that is not today; sell when the share trade ends. Same entries and exits as s5, so shares and options compare directly. Also in `scalp.py` | MU options, 4 contracts |
 
 Each strategy has about $75k (s4 risks premium only). Positions inside a strategy are sized by
 inverse volatility. Picks come from a hindsight study of Oct 13 – Nov 24 2026, a single crash
