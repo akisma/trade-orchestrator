@@ -141,7 +141,10 @@ def flatten(strategy, symbols, tag):
             except ApiError as e:
                 log(f"  cancel failed on {s}: {e}")
     if held and not DRY:
-        time.sleep(1.5)
+        for _ in range(10):  # a sell is rejected while a just-cancelled stop still holds the shares
+            time.sleep(1)
+            if not api("GET", f"{TRADE}/orders", params=dict(status="open", symbols=",".join(held))):
+                break
     for s in held:
         qty = float(pos[s]["qty"])
         submit(strategy, s, "sell" if qty > 0 else "buy", int(abs(qty)), tag)
