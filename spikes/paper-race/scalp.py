@@ -86,7 +86,10 @@ def flatten(tag, suffix=""):
             api("DELETE", f"{TRADE}/orders/{o['id']}")
         except ApiError as e:
             log(f"  s5 cancel failed: {e}")
-    time.sleep(1.5)
+    for _ in range(10):  # wait until the cancelled exit pair has released the shares
+        time.sleep(1)
+        if not api("GET", f"{TRADE}/orders", params=dict(status="open", symbols=SYMBOL)):
+            break
     pos = positions().get(SYMBOL)
     if not pos:
         return
